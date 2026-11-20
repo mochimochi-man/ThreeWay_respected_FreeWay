@@ -711,6 +711,8 @@ function start(THREE, A) {
     // v8: IC の区間（本線の道のり、折り返し後）。左 = 自車側、右 = 反対車線側
     var rampLArr = [], rampRArr = []; for (var ri0 = 0; ri0 < 4; ri0++) { rampLArr.push(new THREE.Vector2(-1e6, -1e6)); rampRArr.push(new THREE.Vector2(-1e6, -1e6)); }
     var U_RAMPL = { value: rampLArr }, U_RAMPR = { value: rampRArr };
+    var dashLArr = [], dashRArr = []; for (var di0 = 0; di0 < 4; di0++) { dashLArr.push(new THREE.Vector2(-1e6, -1e6)); dashRArr.push(new THREE.Vector2(-1e6, -1e6)); }
+    roadMat.uniforms.uDashL = { value: dashLArr }; roadMat.uniforms.uDashR = { value: dashRArr };
     [roadMat, deckMat, railMat, wallMat, panelMat].forEach(function (m) { m.uniforms.uRampL = U_RAMPL; m.uniforms.uRampR = U_RAMPR; });
     for (var ksec in U_SEC) railMat.uniforms[ksec] = U_SEC[ksec];
     function inRampZone(s, side) {                                       // 本線の道のり s が、その側の出入口の区間か
@@ -847,14 +849,14 @@ function start(THREE, A) {
         var x0 = R.X[0], y0 = R.Y[0], z0 = R.Z[0];
         function tiltY(k, x) { var pk0 = pts[k]; return pk0.bf ? -pk0.bf * pk0.sbk * x : 0; }   // 横位置 x（外向き）での、本線の傾きによる高さの差
         // 路面: 4 頂点（内側の縁、内側の車線端、外側の車線端、外側の縁）
-        var sp = [], sn = [], ss = [], sl = [], si = [], sr = [];
+        var sp = [], sn = [], ss = [], sl = [], si = [], sr = [], sg = [];
         var iN = 0; for (var jn = 0; jn < n; jn++) if (pts[jn].r.u <= 0) iN = jn;   // ノーズの行
         var isExit = R.k === 0 || R.k === 3, uNose = R.U[iN];
         if (Q_ICDUMP && isExit) { var arS = []; [95, 58].forEach(function (b) { for (var ja = 0; ja < n; ja++) if (R.U[ja] >= uNose - b) { arS.push(Math.round(pts[ja].r.s)); break; } }); ARROW_LOG.push('k' + R.k + ':' + arS.join('/') + ' nose ' + Math.round(pts[iN].r.s)); }
         var inner = [], outer = [];
         for (var j = 0; j < n; j++) {
             var r = pts[j].r, lat = r.lat;
-            var inn = (r.att || pts[j].goreZone) ? Math.min(-0.55, MAIN_EDGE - lat) : -2.5;
+            var inn = r.att ? Math.min(-0.55, MAIN_EDGE - lat) : pts[j].goreZone ? Math.min(-0.55, (P.outerLine + 0.2) - lat) : -2.5;   // 導流帯は本線の外側線のすぐ脇から（ランプの線が本線の線から分かれて見えるように）
             if (r.att) inn = (P.outerLine + 0.2) - LANE_C;                  // 減速・加速車線は本線の外側線のすぐ脇からランプの路面で描く（車線の途中に路面の継ぎ目を出さない）
             var out = r.att ? Math.max(inn, Math.max(P.outerLine + 4.5 * r.tp, MAIN_EDGE) - LANE_C) : 2.75;   // すりつけでも舗装の外縁（地覆・ガードレール）は本線の舗装端より内へ寄せない（狭まるのは車線だけ）
             inner.push(inn); outer.push(out);
@@ -862,13 +864,13 @@ function start(THREE, A) {
             for (var q = 0; q < 4; q++) {
                 var yv = R.Y[j] + tiltY(j, offs[q]);                       // 本線と同じ横の傾き（内側の縁は本線の舗装の高さに一致する）
                 sp.push(R.X[j] + OX[j] * offs[q] - x0, yv - y0, R.Z[j] + OZ[j] * offs[q] - z0);
-                sn.push(0, 1, 0); ss.push(R.U[j]); sl.push(offs[q]); sr.push(r.tp, isExit ? 0 : 1, uNose);
+                sn.push(0, 1, 0); ss.push(R.U[j]); sl.push(offs[q]); sr.push(r.tp, isExit ? 0 : 1, uNose); sg.push(!r.att && pts[j].goreZone ? 1 : 0);
             }
             if (j) for (var q2 = 0; q2 < 3; q2++) { var a0 = (j - 1) * 4 + q2, b0 = j * 4 + q2; si.push(a0, b0, a0 + 1, a0 + 1, b0, b0 + 1); }
         }
         var gS = new THREE.BufferGeometry();
         gS.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3)); gS.setAttribute('normal', new THREE.Float32BufferAttribute(sn, 3));
-        gS.setAttribute('aSta', new THREE.Float32BufferAttribute(ss, 1)); gS.setAttribute('aLat', new THREE.Float32BufferAttribute(sl, 1)); gS.setAttribute('aRamp', new THREE.Float32BufferAttribute(sr, 3)); gS.setIndex(si);
+        gS.setAttribute('aSta', new THREE.Float32BufferAttribute(ss, 1)); gS.setAttribute('aLat', new THREE.Float32BufferAttribute(sl, 1)); gS.setAttribute('aRamp', new THREE.Float32BufferAttribute(sr, 3)); gS.setAttribute('aGore', new THREE.Float32BufferAttribute(sg, 1)); gS.setIndex(si);
         // 構造（地覆・床版の側面と下面・箱桁・低い所の擁壁）と、ガードレール（帯）
         var cp = [], cn = [], gp = [], gn = [];
         function quad(arrP, arrN, j, xa, ya, xb, yb, nx, ny) {          // 行 j-1 → j の帯（横位置 x・高さ y は行ごとの関数）
@@ -2703,36 +2705,44 @@ function start(THREE, A) {
         var T = parTrack;
         while (!icList.length || icList[icList.length - 1].sEx0 < upTo) {
             var n = icList.length, prev = n ? icList[n - 1] : null;
-            var sEx0 = n === 0 ? 3000 + 1000 * gapHash(n, 81) : prev.sEx0 + 6000 + 4000 * gapHash(n, 81);
-            sEx0 = Math.round(sEx0 / 4) * 4 + 1;
-            var gapEnt = 1050 + 250 * gapHash(n, 82), ok = false;   // 出口のノーズから入口のノーズまで（設計は 400〜700 m。高さ 23 m を 6% 以内で下りて上るランプが重ならない長さ）
-            var half = null, nHalf = icList.filter(function (q2) { return q2.half; }).length;
-            for (var tr = 0; tr < 60 && !ok; tr++) {
-                // v9 の後: 18 回（約 5 km）置けなければ、出口だけ・入口だけのハーフ IC も試す（全体の 2 割まで）
-                half = (tr >= 18 && (nHalf + 1) <= 0.2 * (n + 1)) ? (tr % 3 === 1 ? 'exit' : tr % 3 === 2 ? 'entry' : null) : null;
-                var sN1 = sEx0 + EX_TAPER + EX_PAR, sN2 = sN1 + gapEnt, sEnd0 = sN2 + EN_PAR + EN_TAPER;
-                T.ensure(sEnd0 + 7000); recordRoad();
-                var rMinT = tr < 10 ? P.icMinR : tr < 24 ? 160 : 120;              // 置けない区間が続いたら、曲率半径の下限を 220 → 160 → 120 m と段階的に下げる
-                ok = icCurveOk(T, sEx0 - 50, sN1 + 50, rMinT) && icCurveOk(T, sN2 - 50, sEnd0 + 50, rMinT); var why = ok ? '' : 'curve';
-                if (ok) {                                                    // ランプの勾配 6% 以内・曲率半径 80 m 以上を確かめる
-                    var icT = { n: n, sEx0: sEx0, sN1: sN1, sN2: sN1 + Math.round(gapEnt / 4) * 4, half: half };
-                    icT.sEnd = icT.sN2 + EN_PAR + EN_TAPER;
-                    buildICRamps(icT);
-                    for (var rk = 0; rk < 4; rk++) if (icT.ramps[rk].gmax > 0.06 || icT.ramps[rk].rmin < 80) { ok = false; why = 'geom'; }
-                    if (ok && (rampsClash(icT.ramps[0], icT.ramps[1]) || rampsClash(icT.ramps[2], icT.ramps[3]))) { ok = false; why = 'clash'; }
-                    if (ok && icT.ramps.some(rampHitsRoad)) { ok = false; why = 'road'; }
-                    if (ok && icT.ramps.some(function (R) { for (var q = 0; q < R.n; q += 3) for (var kk in railCache) { var LQ = railCache[kk]; if (lineDist(LQ, R.X[q], R.Z[q]) < RAIL_CLEAR + 3.5 && (LQ.par || R.Y[q] - 2.2 < P.groundY + RAIL_Y + 6.5)) return true; } return false; })) { ok = false; why = 'rail'; }   // 先に決めた線路（道路が戻ってくる所）と寄らない
-                    // （ランプは道のりで近づいた時に作るので、いまのカメラの近くを通っても突然は現れない。この条件は外した）
+            // コアが作ったインターチェンジの区間に置く: 出口の直線の始まり + 50 m が出口のすりつけの始まり、入口の直線の始まり + 50 m が入口のノーズ
+            var sMin = n === 0 ? 2500 : prev.sEnd + 3000;
+            T.ensure(sMin + 30000); recordRoad();
+            var sites = T.icSites().filter(function (t) { return t.s + 54 >= sMin; });
+            var sEx0 = sMin, gapEnt = 1050, ok = false, half = null, nHalf = icList.filter(function (q2) { return q2.half; }).length;
+            for (var si = 0; si < sites.length && si < 4 && !ok; si++) {
+                var site = sites[si];
+                sEx0 = Math.ceil((site.s + 50) / 4) * 4 + 1;
+                gapEnt = Math.ceil((site.s + site.exit + site.mid + 50 - (sEx0 + EX_TAPER + EX_PAR)) / 4) * 4;   // 入口のノーズの 50 m 手前が入口の直線の始まり
+                for (var hv = 0; hv < 3 && !ok; hv++) {
+                    // 両方向が置けなければ、出口だけ・入口だけのハーフ IC も試す（全体の 2 割まで）
+                    half = hv === 0 ? null : (nHalf + 1) <= 0.2 * (n + 1) ? (hv === 1 ? 'exit' : 'entry') : null;
+                    if (hv > 0 && !half) break;
+                    var sN1 = sEx0 + EX_TAPER + EX_PAR, sEnd0 = sN1 + gapEnt + EN_PAR + EN_TAPER;
+                    T.ensure(sEnd0 + 7000); recordRoad();
+                    ok = icCurveOk(T, sEx0 - 50, sN1 + 50, 1e12) && icCurveOk(T, sN1 + gapEnt - 50, sEnd0 + 50, 1e12); var why = ok ? '' : 'curve';
+                    if (ok) {                                                    // ランプの勾配 6% 以内・曲率半径 80 m 以上を確かめる
+                        var icT = { n: n, sEx0: sEx0, sN1: sN1, sN2: sN1 + gapEnt, half: half };
+                        icT.sEnd = icT.sN2 + EN_PAR + EN_TAPER;
+                        buildICRamps(icT);
+                        for (var rk = 0; rk < 4; rk++) if (icT.ramps[rk].gmax > 0.06 || icT.ramps[rk].rmin < 80) { ok = false; why = 'geom'; }
+                        if (ok && (rampsClash(icT.ramps[0], icT.ramps[1]) || rampsClash(icT.ramps[2], icT.ramps[3]))) { ok = false; why = 'clash'; }
+                        if (ok && icT.ramps.some(rampHitsRoad)) { ok = false; why = 'road'; }
+                        if (ok && icT.ramps.some(function (R) { for (var q = 0; q < R.n; q += 3) for (var kk in railCache) { var LQ = railCache[kk]; if (lineDist(LQ, R.X[q], R.Z[q]) < RAIL_CLEAR + 3.5 && (LQ.par || R.Y[q] - 2.2 < P.groundY + RAIL_Y + 6.5)) return true; } return false; })) { ok = false; why = 'rail'; }   // 先に決めた線路（道路が戻ってくる所）と寄らない
+                    }
+                    if (!ok) icWhy[why] = (icWhy[why] || 0) + 1;
                 }
-                if (!ok) icWhy[why] = (icWhy[why] || 0) + 1;
-                if (!ok && !(half && tr % 3 === 1)) sEx0 += 300;              // ハーフ IC の 2 通りは同じ位置で試す
+            }
+            if (!ok && sites.length) {                                       // 置けなかった時は、次の IC をその直線の先から探す
+                var last = sites[Math.min(sites.length, 4) - 1];
+                sEx0 = Math.ceil((last.s + 50) / 4) * 4 + 1; gapEnt = Math.ceil((last.exit + last.mid - 160) / 4) * 4;
             }
             var ic = { n: n, sEx0: sEx0, sN1: sEx0 + EX_TAPER + EX_PAR, ok: ok, no: 3 + n, half: ok ? half : null,
                        name: IC_NAMES[Math.floor(gapHash(n, 83) * IC_NAMES.length) % IC_NAMES.length],
                        d1: IC_DEST[Math.floor(gapHash(n, 84) * IC_DEST.length) % IC_DEST.length],
                        d2: IC_DEST[Math.floor(gapHash(n, 85) * IC_DEST.length) % IC_DEST.length] };
             if (ic.d2 === ic.d1) ic.d2 = IC_DEST[(IC_DEST.indexOf(ic.d1) + 7) % IC_DEST.length];
-            ic.sN2 = ic.sN1 + Math.round(gapEnt / 4) * 4;
+            ic.sN2 = ic.sN1 + gapEnt;
             ic.sEnd = ic.sN2 + EN_PAR + EN_TAPER;
             ic.s2k = ic.sEx0 - 2000;
             if (ok) { buildICRamps(ic); purgeForRamps(ic); }
@@ -2847,8 +2857,13 @@ function start(THREE, A) {
         // 本線のガードレール・地覆を外す区間（すりつけの始まり 〜 ノーズの先端）
         ic.zoneL = [ic.sEx0, ic.sN1 + noseS(ic.ramps[0]), ic.sN2 - noseS(ic.ramps[1]), ic.sEnd];
         ic.zoneR = [ic.sN1 - EN_PAR - EN_TAPER, ic.sN1 + noseS(ic.ramps[2]), ic.sN2 - noseS(ic.ramps[3]), ic.sN2 + EX_TAPER + EX_PAR];
+        // 外側線を太い破線にする区間（すりつけの始まり 〜 分かれ目。分かれ目から先の導流帯に沿う所は実線）
+        ic.dashL = [ic.zoneL[0], ic.sN1, ic.sN2, ic.zoneL[3]];
+        ic.dashR = [ic.zoneR[0], ic.sN1, ic.sN2, ic.zoneR[3]];
         if (ic.ramps[0].empty) { ic.zoneL[0] = ic.zoneL[1] = -1e9; } if (ic.ramps[1].empty) { ic.zoneL[2] = ic.zoneL[3] = -1e9; }
         if (ic.ramps[2].empty) { ic.zoneR[0] = ic.zoneR[1] = -1e9; } if (ic.ramps[3].empty) { ic.zoneR[2] = ic.zoneR[3] = -1e9; }
+        if (ic.ramps[0].empty) { ic.dashL[0] = ic.dashL[1] = -1e9; } if (ic.ramps[1].empty) { ic.dashL[2] = ic.dashL[3] = -1e9; }
+        if (ic.ramps[2].empty) { ic.dashR[0] = ic.dashR[1] = -1e9; } if (ic.ramps[3].empty) { ic.dashR[2] = ic.dashR[3] = -1e9; }
         // 標識（左: 自車用。右: 反対車線用で、自車からは裏面）
         ic.signs = [
             { s: ic.sEx0 - 2000, side: -1, kind: '2km' }, { s: ic.sEx0 - 1000, side: -1, kind: '1km' }, { s: ic.sEx0 - 500, side: -1, kind: '500m' }, { s: ic.sEx0, side: -1, kind: 'exit' },
@@ -4448,11 +4463,13 @@ function start(THREE, A) {
         for (var ici = 0; ici < icList.length; ici++) {
             var icz = icList[ici]; if (!icz.ramps || icz.zB < sCam - 400 || icz.zA > sCam + P.viewLen) continue;
             for (var zp = 0; zp < 2; zp++) {
+                if (zl < 4) dashLArr[zl].set((icz.dashL[zp * 2] - sBase) * P.segLen, (icz.dashL[zp * 2 + 1] - sBase) * P.segLen);
+                if (zr < 4) dashRArr[zr].set((icz.dashR[zp * 2] - sBase) * P.segLen, (icz.dashR[zp * 2 + 1] - sBase) * P.segLen);
                 if (zl < 4) rampLArr[zl++].set((icz.zoneL[zp * 2] - sBase) * P.segLen, (icz.zoneL[zp * 2 + 1] - sBase) * P.segLen);
                 if (zr < 4) rampRArr[zr++].set((icz.zoneR[zp * 2] - sBase) * P.segLen, (icz.zoneR[zp * 2 + 1] - sBase) * P.segLen);
             }
         }
-        for (; zl < 4; zl++) rampLArr[zl].set(-1e6, -1e6); for (; zr < 4; zr++) rampRArr[zr].set(-1e6, -1e6);
+        for (; zl < 4; zl++) { rampLArr[zl].set(-1e6, -1e6); dashLArr[zl].set(-1e6, -1e6); } for (; zr < 4; zr++) { rampRArr[zr].set(-1e6, -1e6); dashRArr[zr].set(-1e6, -1e6); }
         fillSecs(sBase);
         if (!q.nov9) updateWallParts(sBase);
         updateTruss();

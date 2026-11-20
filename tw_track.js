@@ -90,5 +90,10 @@ TwTrack.prototype.sample = function (s, out) {
 
 TwTrack.prototype.curveAt = function (s) { return this.a[Math.floor(s) & MASK]; };
 
+// コアが作ったインターチェンジの区間を道のりで返す: [{s: 始まりの道のり, exit, mid, entry: 出口の直線・間・入口の直線の長さ}]
+TwTrack.prototype.icSites = function () {
+    return this.core.sites.map(function (t) { return { s: LEAD - 1 + t.d, exit: t.exit, mid: t.mid, entry: t.entry }; });
+};
+
 global.TwTrack = TwTrack;
 })(typeof window !== 'undefined' ? window : this);
