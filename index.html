@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ThreeWay respected FreeWay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@700;900&display=swap">
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas#gl { display: block; width: 100vw; height: 100vh; }
+  body.idle { cursor: none; }
+  #info { position: fixed; left: 10px; top: 8px; color: #9ab; font: 12px/1.4 Consolas, monospace; white-space: pre;
+          text-shadow: 0 0 3px #000; display: none; pointer-events: none; }
+  #hint { position: fixed; right: 14px; bottom: 10px; color: #667; font: 12px/1.5 system-ui, sans-serif; text-align: right;
+          transition: opacity 2s; pointer-events: none; }
+  #toast { position: fixed; left: 50%; top: 14px; transform: translateX(-50%); color: #cde; font: 14px system-ui, sans-serif;
+           background: rgba(0,0,0,.4); padding: 4px 12px; border-radius: 4px; opacity: 0; transition: opacity .4s; pointer-events: none; }
+  #err { position: fixed; left: 10px; bottom: 10px; max-width: 90vw; max-height: 40vh; overflow: auto; color: #f88;
+         font: 12px/1.3 Consolas, monospace; white-space: pre-wrap; background: rgba(0,0,0,.6); display: none; }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="info"></div>
+<div id="hint">← → 車線移動　F / ダブルクリック 全画面　1–4 画質　P 情報　M 音<br>↑↓ 路面の明るさ　S 星の瞬き　B バイク</div>
+<div id="toast"></div>
+<pre id="err"></pre>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+<script>
+  // 読み込み・実行時エラーを画面に出す（file:// でもデバッグできるように）
+  window.addEventListener('error', function (e) {
+    var b = document.getElementById('err');
+    b.style.display = 'block';
+    b.textContent += (e.message || e) + (e.filename ? '  @' + e.filename + ':' + e.lineno : '') + '\n';
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var b = document.getElementById('err');
+    b.style.display = 'block';
+    b.textContent += 'unhandled: ' + (e.reason && e.reason.message || e.reason) + '\n';
+  });
+</script>
+<!-- ローカル JS はクラシックスクリプト（file:// では module の import が CORS で失敗するため） -->
+<script src="tw_core.js"></script>
+<script src="tw_track.js"></script>
+<script src="tw_shaders.js"></script>
+<script src="tw_app.js"></script>
+<script type="module">
+  try {
+    const THREE = await import('three');
+    const { EffectComposer } = await import('three/addons/postprocessing/EffectComposer.js');
+    const { RenderPass } = await import('three/addons/postprocessing/RenderPass.js');
+    const { UnrealBloomPass } = await import('three/addons/postprocessing/UnrealBloomPass.js');
+    const { ShaderPass } = await import('three/addons/postprocessing/ShaderPass.js');
+    const { OutputPass } = await import('three/addons/postprocessing/OutputPass.js');
+    const { Pass, FullScreenQuad } = await import('three/addons/postprocessing/Pass.js');
+    const BufferGeometryUtils = await import('three/addons/utils/BufferGeometryUtils.js');
+    ThreeWayApp.start(THREE, { EffectComposer, RenderPass, UnrealBloomPass, ShaderPass, OutputPass, BufferGeometryUtils, Pass, FullScreenQuad });
+  } catch (e) {
+    const b = document.getElementById('err');
+    b.style.display = 'block';
+    b.textContent += 'three.js の読み込みまたは初期化に失敗しました（インターネット接続が必要です）: ' + (e && e.stack || e) + '\n';
+    console.error(e);
+  }
+</script>
+</body>
+</html>
