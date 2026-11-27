@@ -1216,6 +1216,52 @@ var STAR_VERT = [
 '}'
 ].join('\n');
 
+// --- 月（ランダムで出る）。板の中央 1/3 が月面、外側は淡い光の暈 -------------------------
+var MOON_VERT = [
+'varying vec2 vUv;',
+'void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }'
+].join('\n');
+var MOON_FRAG = [
+'varying vec2 vUv;',
+'uniform vec3 uSun;',          // 月面の局所座標（x 右・y 上・z 見る人の方）での太陽の向き
+'uniform float uK;',           // 月の半径 / 板の半幅
+'uniform float uBright;',
+'uniform float uHalo;',
+'uniform float uAtt;',         // 低いほど大気で暗く
+'uniform float uWarm;',        // 低いほど赤みを帯びる
+NOISE,
+'void main() {',
+'    vec2 p = (vUv * 2.0 - 1.0) / uK;',
+'    float r = length(p), aa = max(fwidth(r), 1e-3);',
+'    vec3 col = vec3(0.0); float a = 0.0;',
+'    if (r < 1.0 + aa) {',
+'        vec2 q = p / max(r, 1.0);',
+'        vec3 n = vec3(q, sqrt(max(0.0, 1.0 - dot(q, q))));',
+// 月面の模様: 球面に貼った座標（縁ほど詰まる）で、海（暗い大きなむら）・高地・細かい凹凸・明るいクレーター
+'        vec2 sc = n.xy / (0.35 + 0.65 * n.z) * 1.6 + vec2(3.1, 1.7);',
+'        float maria = smoothstep(0.42, 0.60, fbm(sc * 0.85 + vec2(5.2, 1.1)));',
+'        float detail = fbm(sc * 5.0 + 2.3), fine = vnoise(sc * 18.0);',
+'        float alb = mix(0.19, 0.105, maria) * (0.86 + 0.24 * detail) * (0.94 + 0.12 * fine);',
+'        vec2 cc = sc * 3.0, ci = floor(cc); vec2 cf = fract(cc) - 0.5 - (vec2(hash12(ci), hash12(ci + 7.1)) - 0.5) * 0.6;',
+'        float cr = hash12(ci + 3.3); alb += step(0.86, cr) * 0.10 * exp(-dot(cf, cf) * 60.0);',
+'        float mu0 = dot(n, uSun), mu = n.z;',
+'        float I = max(mu0, 0.0) / (max(mu0, 0.0) + mu + 1e-3) * 2.0;',            // 月面の反射（Lommel-Seeliger: 満月は縁まで明るい円板）
+'        I *= smoothstep(-0.02, 0.06, mu0);',
+'        col = vec3(1.0, 0.97, 0.90) * alb * I * uBright;',
+'        col += vec3(0.55, 0.65, 0.85) * alb * 0.05 * (1.0 - smoothstep(-0.02, 0.06, mu0));',  // 地球照（欠けた側がかすかに見える）
+'        float disc = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, r);',
+'        col *= disc;',
+// 欠けた側は空を隠さない（手前の大気の明るさは月の前にもある）。光っている所だけ後ろの空・星を隠す
+'        a = disc * smoothstep(0.0, 0.12, dot(col, vec3(0.33)));',
+'    }',
+'    float d = max(r - 1.0, 0.0);',
+'    vec3 halo = vec3(0.80, 0.86, 1.0) * (exp(-d * 3.0) * 0.05 + exp(-d * 0.7) * 0.012) * uHalo;',   // 薄雲・大気の散乱の暈
+'    col += halo * (1.0 - step(r, 1.0));',
+'    col *= mix(vec3(1.0), vec3(1.0, 0.72, 0.46), uWarm) * uAtt;',
+'    gl_FragColor = vec4(col, a * min(1.0, uAtt * 1.5));',
+'}'
+].join('\n');
+
 var STAR_FRAG = [
 'varying vec3 vCol;',
 'varying float vSoft;',
@@ -2457,7 +2503,7 @@ global.TW_SHADERS = {
     roadVert: ROAD_VERT, roadFrag: ROAD_FRAG,
     litVert: LIT_VERT, litFrag: LIT_FRAG,
     skyVert: SKY_VERT, skyFrag: SKY_FRAG,
-    starVert: STAR_VERT, starFrag: STAR_FRAG,
+    starVert: STAR_VERT, starFrag: STAR_FRAG, moonVert: MOON_VERT, moonFrag: MOON_FRAG,
     glowVert: GLOW_VERT, glowFrag: GLOW_FRAG,
     coneVert: CONE_VERT, coneFrag: CONE_FRAG,
     cityVert: CITY_VERT, cityFrag: CITY_FRAG,

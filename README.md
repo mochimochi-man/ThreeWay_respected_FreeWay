@@ -13,6 +13,7 @@
 `index.html` を Chrome または Edge で開くだけで動きます。
 まとめてダウンロードしたい場合は、[Releases](https://github.com/mochimochi-man/ThreeWay_respected_FreeWay/releases/latest) にある ZIP（`ThreeWay_respected_FreeWay_1.0.0.zip`）をダウンロードし、展開してから中の `index.html` を開いてください。
 左右のカーソルで車線移動、1-4で画質設定、Bでバイク風の動きになります。
+X/Zで加速・減速（離しても速度はそのまま）、Dでドローン視点に切り替わります。
 流れる風景に飽きを感じてきたら、一つずつキーを押してみてください。
 何か起こるかもしれません。
 

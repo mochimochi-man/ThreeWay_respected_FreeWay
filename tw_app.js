@@ -295,6 +295,57 @@ function start(THREE, A) {
         skyGroup.add(starsObj);
     }
 
+    // --- 月: 起動ごとにランダム（6 割で出る）。方位・高さ（8〜42°）・傾きはランダム、満ち欠けは今日の月齢。見かけの大きさは実際の約 2.5 倍（1.3°）---
+    (function () {
+        var mr = mulberry32(seed * 977 + 31), vis = mr() < 0.6, az = mr() * 6.2831853, el = 0.14 + mr() * 0.6;
+        // 月齢: 基準の新月（2000-01-06 18:14 UTC）から朔望月 29.530588853 日で割った余り。ph = 満月からの位相角（0 = 満月、π = 新月）
+        var age = (((Date.now() - Date.UTC(2000, 0, 6, 18, 14)) / 86400000) % 29.530588853 + 29.530588853) % 29.530588853, fA = age / 29.530588853;
+        var ph = Math.abs(Math.PI - 2 * Math.PI * fA), wax = fA < 0.5 ? 1 : -1, tilt = (mr() - 0.5) * 0.6;   // 満ちていく月は右が光る
+        mr(); mr();
+        if (q.moon) { var mp = q.moon.split(','); vis = mp[0] !== '0'; if (mp.length >= 2) { az = parseFloat(mp[0]) * Math.PI / 180; el = parseFloat(mp[1]) * Math.PI / 180; } if (mp.length >= 3) ph = parseFloat(mp[2]) * Math.PI / 180; }
+        if (!vis) return;
+        var R = 8400, rd = R * Math.tan(0.65 * Math.PI / 180), K = 1 / 3;
+        var dir = new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el));
+        var sun = new THREE.Vector3(Math.sin(ph) * wax, 0, Math.cos(ph)).applyAxisAngle(new THREE.Vector3(0, 0, 1), tilt);
+        var frac = (1 + Math.cos(ph)) / 2;                                // 照らされている割合（暈の強さ）
+        var mat = new THREE.ShaderMaterial({
+            vertexShader: S.moonVert, fragmentShader: S.moonFrag, transparent: true, depthWrite: false, depthTest: true,
+            blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
+            uniforms: { uSun: { value: sun }, uK: { value: K }, uBright: { value: 14.0 }, uHalo: { value: 0.3 + 1.7 * frac * frac },
+                        uAtt: { value: 0.35 + 0.65 * Math.min(1, Math.max(0, (el - 0.02) / 0.33)) }, uWarm: { value: 1 - Math.min(1, Math.max(0, (el - 0.05) / 0.35)) } }
+        });
+        var moon = new THREE.Mesh(new THREE.PlaneGeometry(2 * rd / K, 2 * rd / K), mat);
+        moon.position.copy(dir).multiplyScalar(R);
+        moon.quaternion.setFromRotationMatrix(new THREE.Matrix4().lookAt(new THREE.Vector3(0, 0, 0), moon.position, new THREE.Vector3(0, 1, 0)));   // 表（+z）を見る人へ、上は鉛直
+        moon.renderOrder = -8.5; moon.frustumCulled = false; skyGroup.add(moon);
+        // 金星: 月の近く。金星は太陽の方向（離角 47° 以内）にしか見えないので、月の光っている側（太陽のある側）へ 3〜7° 離して置く。
+        // 色は黄色みを帯びた白、−4.6〜−4.9 等で月の次に明るい。惑星なので瞬かない
+        var sep = (3 + 4 * mr()) * Math.PI / 180, mq = moon.quaternion;
+        var off = new THREE.Vector3(sun.x, sun.y, 0); if (off.lengthSq() < 1e-4) off.set(1, 0, 0);   // 満月に近いと向きが決まらないので右へ
+        off.normalize().applyQuaternion(mq);
+        var vdir = dir.clone().addScaledVector(off, Math.tan(sep)).normalize();
+        if (vdir.y < Math.sin(3 * Math.PI / 180)) vdir = dir.clone().addScaledVector(off, -Math.tan(sep)).normalize();   // 地平線の下に入るなら反対側へ
+        var vr = R * Math.tan(0.35 * Math.PI / 180);                       // 板の半幅（光のにじみ込み）
+        var vmat = new THREE.ShaderMaterial({
+            vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+            fragmentShader: ['varying vec2 vUv; uniform float uAtt;',
+                'void main() {',
+                '    float r = length(vUv * 2.0 - 1.0), px = max(fwidth(r), 1e-4);',
+                '    float core = 1.0 - smoothstep(0.0, max(0.05, 2.2 * px), r);',          // 芯は 1〜2 画素の点
+                '    float glow = exp(-r * 9.0) * 0.6 + exp(-r * 3.5) * 0.08;',
+                '    vec3 c = vec3(1.0, 0.95, 0.84) * (core * 7.0 + glow) * uAtt;',
+                '    gl_FragColor = vec4(c, 1.0);',
+                '}'].join(String.fromCharCode(10)),
+            transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: true,
+            uniforms: { uAtt: { value: 0.35 + 0.65 * Math.min(1, Math.max(0, (Math.asin(vdir.y) - 0.02) / 0.33)) } }
+        });
+        vmat.extensions = { derivatives: true };
+        var venus = new THREE.Mesh(new THREE.PlaneGeometry(2 * vr, 2 * vr), vmat);
+        venus.position.copy(vdir).multiplyScalar(R - 10);
+        venus.quaternion.setFromRotationMatrix(new THREE.Matrix4().lookAt(new THREE.Vector3(0, 0, 0), venus.position, new THREE.Vector3(0, 1, 0)));
+        venus.renderOrder = -8.4; venus.frustumCulled = false; skyGroup.add(venus);
+    })();
+
     // --- 大都会（3 層）と遠い丘陵 ---------------------------------------------------------
     // 遠景: カメラに追従する半径 4.5〜7.5 km のリング（超高層群）、地平線の光の帯、丘陵のシルエット
     // 中景: 半径 2.3〜3.6 km のリング。カメラの移動に半分だけ追従させて層の間に視差を出す
@@ -3835,7 +3886,8 @@ function start(THREE, A) {
         }
         galCars.count = n; galCars.instanceMatrix.needsUpdate = true; galGeo.attributes.aCarInfo.needsUpdate = true;
         var H = galAt(G, sh, galTmp);
-        put(H[0] + H[3] * 1, H[1] + 2.0 + H[4], H[2] + H[5] * 1, 3.0 * fade, 2.9 * fade, 2.5 * fade, -2.2);
+        tmpF.set(H[3], H[4], H[5]).normalize(); tmpX.crossVectors(yAxis, tmpF).normalize(); tmpY.crossVectors(tmpF, tmpX);   // 前照灯は通常の電車と同じく、先頭の前面・レール面から 1.25 m（GAL_K 倍）
+        put(H[0] + tmpF.x * 0.3 * GAL_K + tmpY.x * 1.25 * GAL_K, H[1] + tmpF.y * 0.3 * GAL_K + tmpY.y * 1.25 * GAL_K, H[2] + tmpF.z * 0.3 * GAL_K + tmpY.z * 1.25 * GAL_K, 3.0 * fade, 2.9 * fade, 2.5 * fade, -2.2);
         for (var pk = 0; pk < 64; pk++) {
             var tE = Math.floor(G.t / 0.22) * 0.22 - pk * 0.22, ag = G.t - tE; if (tE < 0 || galHead(tE) < 150) break;
             var PE = galAt(G, galHead(tE) - 3.0 * GAL_K, galTmp), ph2 = Math.sin(pk * 78.233 + Math.floor(tE / 0.22) * 12.9898) * 43758.5453; ph2 -= Math.floor(ph2);
@@ -4262,6 +4314,139 @@ function start(THREE, A) {
     // 操舵（±15/フレーム、±285 で止まる）を、左側車道の中（latMin〜latMax）に収まる範囲で使う
     var steerMin = Math.max(-285, (P.latMin - P.laneX) / unitM), steerMax = Math.min(285, (P.latMax - P.laneX) / unitM);
     var keyL = false, keyR = false, paused = !!q.pause;
+    // 速度の調整（X 加速・Z 減速。離しても速度はそのまま）。調整中だけタコメーターを出し、離すと速やかに消す
+    // ドローン（D で切り替え）: 道路の後ろ上空から、進む先を見下ろして道なりに追う。droneT は 0（運転席）〜1（ドローン）へ 1.5 秒でなめらかに移る
+    var droneOn = !!q.drone, droneT = droneOn ? 1 : 0, droneH = 55, droneVS = 0, droneYPrev = null, droneS0 = null, droneV = new THREE.Vector3(), droneL = new THREE.Vector3(), FD = null, FDT = null;
+    var keyX = false, keyZ = false, SPD_MIN = 40 / 3.6, SPD_MAX = 200 / 3.6, SPD_RATE = 25 / 3.6;   // 毎秒 25 km/h
+    var tachoA = 0, tachoHold = 0, tachoRpm = 0, tachoCv = null, tachoCx = null;
+    function tachoGear(kmh) {                                            // 6 速。回転が 1500 rpm を下回らない最も高い段
+        var K = [100, 60, 42, 32, 26, 22];
+        for (var g = 5; g > 0; g--) if (kmh * K[g] >= 1500) return { g: g + 1, rpm: kmh * K[g] };
+        return { g: 1, rpm: Math.max(800, kmh * K[0]) };
+    }
+    // 車: 古い車・スポーツカーのような速度計と回転計の 2 眼（画面の右寄り）。バイク: 回転計に速度を入れた 1 眼（中央）
+    var tachoMode = -1;
+    function dialFace(c, cx, cy, R, maxV, step, sub, redFrom, labelDiv, unit) {
+        var a0 = Math.PI * 0.75, span = Math.PI * 1.5;
+        function ang(v) { return a0 + span * v / maxV; }
+        c.fillStyle = 'rgba(4,6,10,0.62)'; c.beginPath(); c.arc(cx, cy, R + 8, 0, Math.PI * 2); c.fill();
+        if (redFrom < maxV) { c.lineWidth = 6; c.strokeStyle = 'rgba(255,60,40,0.85)'; c.beginPath(); c.arc(cx, cy, R - 6, ang(redFrom), ang(maxV)); c.stroke(); }
+        var k = R / 96;                                                  // 小さい盤は文字と目盛りも縮める
+        c.strokeStyle = '#cfe0f0'; c.fillStyle = '#cfe0f0'; c.font = '600 ' + Math.round(15 * k) + 'px system-ui, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+        for (var v = 0; v <= maxV + 1e-6; v += step / sub) {
+            var a = ang(v), big = Math.abs(v / step - Math.round(v / step)) < 1e-6, r1 = R - (big ? 16 : 10) * k;
+            c.lineWidth = big ? 2.5 : 1.2; c.beginPath(); c.moveTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1); c.lineTo(cx + Math.cos(a) * (R - 2), cy + Math.sin(a) * (R - 2)); c.stroke();
+            if (big) c.fillText(String(Math.round(v / labelDiv)), cx + Math.cos(a) * (R - 30 * k), cy + Math.sin(a) * (R - 30 * k));
+        }
+        c.font = Math.round(11 * Math.max(0.85, k)) + 'px system-ui, sans-serif'; c.fillStyle = '#7f93a8'; c.fillText(unit, cx, cy - 34 * k);
+        return ang;
+    }
+    // 盤の中の数字はモノクロ液晶ふう: 灰緑の窓に 7 セグメントの黒い数字（消えている区画も薄く見える）
+    var SEG7 = { '0': 'abcdef', '1': 'bc', '2': 'abged', '3': 'abgcd', '4': 'fgbc', '5': 'afgcd', '6': 'afgedc', '7': 'abc', '8': 'abcdefg', '9': 'abcdfg', ' ': '' };
+    function seg7(c, x, y, h, ch, on) {                                  // (x, y) = 数字の左上、高さ h。少し右へ傾ける
+        var w = h * 0.52, t = h * 0.13, g = t * 0.18, hh = h / 2, sk = 0.10;
+        function P(px, py) { return [x + px + (h - py) * sk, y + py]; }
+        function bar(x0, y0, x1, y1, horiz) {                            // 両端を尖らせた区画
+            var q = horiz ? [P(x0 + g, y0), P(x0 + g + t / 2, y0 - t / 2), P(x1 - g - t / 2, y0 - t / 2), P(x1 - g, y0), P(x1 - g - t / 2, y0 + t / 2), P(x0 + g + t / 2, y0 + t / 2)]
+                          : [P(x0, y0 + g), P(x0 + t / 2, y0 + g + t / 2), P(x0 + t / 2, y1 - g - t / 2), P(x0, y1 - g), P(x0 - t / 2, y1 - g - t / 2), P(x0 - t / 2, y0 + g + t / 2)];
+            c.beginPath(); c.moveTo(q[0][0], q[0][1]); for (var i = 1; i < q.length; i++) c.lineTo(q[i][0], q[i][1]); c.closePath(); c.fill();
+        }
+        var S = { a: [t / 2, t / 2, w - t / 2, t / 2, 1], g: [t / 2, hh, w - t / 2, hh, 1], d: [t / 2, h - t / 2, w - t / 2, h - t / 2, 1],
+                  f: [t / 2, t / 2, t / 2, hh, 0], b: [w - t / 2, t / 2, w - t / 2, hh, 0], e: [t / 2, hh, t / 2, h - t / 2, 0], c: [w - t / 2, hh, w - t / 2, h - t / 2, 0] };
+        var lit = SEG7[ch] || '';
+        for (var k in S) { var v = S[k]; var isOn = lit.indexOf(k) >= 0; if (isOn !== on) continue; bar(v[0], v[1], v[2], v[3], v[4]); }
+    }
+    function lcd(c, cx, cy, h, n, text) {                               // 中心 (cx, cy)、数字の高さ h、桁数 n（右詰め・頭の 0 は消す）
+        var w = h * 0.52, gap = h * 0.22, padX = h * 0.28, padY = h * 0.22;
+        var W = n * w + (n - 1) * gap + padX * 2, H = h + padY * 2, x0 = cx - W / 2, y0 = cy - H / 2;
+        c.fillStyle = '#1a1d18'; c.fillRect(x0 - 2, y0 - 2, W + 4, H + 4);                      // 枠
+        var gr = c.createLinearGradient(0, y0, 0, y0 + H); gr.addColorStop(0, '#9db08e'); gr.addColorStop(1, '#86997a');
+        c.fillStyle = gr; c.fillRect(x0, y0, W, H);                                               // 灰緑の液晶（バックライトで少し明るい）
+        while (text.length < n) text = ' ' + text;
+        for (var i = 0; i < n; i++) {
+            var dx = x0 + padX + i * (w + gap);
+            c.fillStyle = 'rgba(30,40,25,0.10)'; seg7(c, dx, y0 + padY, h, text.charAt(i), false);   // 消えている区画の跡
+            c.fillStyle = '#1b2317'; seg7(c, dx, y0 + padY, h, text.charAt(i), true);
+        }
+    }
+    function dialNeedle(c, cx, cy, R, an) {
+        c.strokeStyle = '#ff8a3c'; c.lineWidth = 3; c.beginPath(); c.moveTo(cx - Math.cos(an) * 12, cy - Math.sin(an) * 12); c.lineTo(cx + Math.cos(an) * (R - 12), cy + Math.sin(an) * (R - 12)); c.stroke();
+        c.fillStyle = '#ff8a3c'; c.beginPath(); c.arc(cx, cy, 5, 0, Math.PI * 2); c.fill();
+    }
+    function drawTacho(dt) {
+        var mode = droneT > 0.5 ? 2 : bikeOn ? 1 : 0;
+        if (!tachoCv) {
+            tachoCv = document.createElement('canvas'); tachoCv.style.pointerEvents = 'none'; tachoCv.style.position = 'fixed'; tachoCv.style.opacity = '0';
+            document.body.appendChild(tachoCv); tachoCx = tachoCv.getContext('2d');
+        }
+        if (mode !== tachoMode) {                                       // 車は右寄り、バイクは中央
+            tachoMode = mode;
+            var W = mode === 2 ? 640 : mode ? 424 : 470, Hc = mode === 2 ? 120 : 220, dpr = Math.min(2, global.devicePixelRatio || 1);
+            tachoCv.style.width = W + 'px'; tachoCv.style.height = Hc + 'px'; tachoCv.style.bottom = mode === 2 ? '18px' : '24px';
+            if (mode) { tachoCv.style.left = '50%'; tachoCv.style.right = ''; tachoCv.style.transform = 'translateX(-50%)'; }
+            else { tachoCv.style.left = ''; tachoCv.style.right = '6%'; tachoCv.style.transform = ''; }
+            tachoCv.width = Math.round(W * dpr); tachoCv.height = Math.round(Hc * dpr);
+            tachoCx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+        tachoCv.style.opacity = tachoA.toFixed(3);
+        if (tachoA <= 0) return;
+        var kmh = speed * 3.6, G = tachoGear(kmh), tgt = G.rpm * (bikeOn ? 2.6 : 1);           // バイクは 400 cc 4 気筒くらいの回転（100 km/h・6 速で約 5700 rpm）
+        tgt += (keyX ? 1 : 0) * 260 * (bikeOn ? 1.8 : 1) - (keyZ ? 1 : 0) * 180;          // 踏み込むと少し回転が上がり、戻すと下がる
+        tachoRpm += (tgt - tachoRpm) * (1 - Math.exp(-dt * 10));
+        // 針の細かい揺れ（エンジンの振動と路面）。回転計は大きめ、速度計はわずか
+        var tt = timeSec, vib = Math.sin(tt * 37.0) * 0.5 + Math.sin(tt * 53.3 + 1.7) * 0.3 + (Math.random() - 0.5) * 0.6;
+        var rpmShow = tachoRpm + vib * (bikeOn ? 90 : 55) + Math.sin(tt * 3.1) * 25;
+        var kmhShow = kmh + (Math.sin(tt * 23.0 + 0.4) * 0.5 + (Math.random() - 0.5) * 0.5) * 0.7;
+        var c = tachoCx;
+        c.clearRect(0, 0, 640, 220);
+        if (mode === 2) {                                               // ドローン: 送信機のモニターふうの数値表示（白い等幅の文字に黒い縁、速度は目盛りの帯）
+            c.textBaseline = 'middle'; c.lineJoin = 'round';
+            function osd(txt, x, y, size, align, col) { c.font = '600 ' + size + 'px Consolas, "Courier New", monospace'; c.textAlign = align; c.lineWidth = 3; c.strokeStyle = 'rgba(0,0,0,0.75)'; c.strokeText(txt, x, y); c.fillStyle = col || '#f2f6f8'; c.fillText(txt, x, y); }
+            // 速度の帯（40〜200 km/h）と現在値の三角
+            var bx0 = 120, bx1 = 520, by = 30, fr = (kmh - 40) / 160;
+            c.strokeStyle = 'rgba(0,0,0,0.6)'; c.lineWidth = 4; c.beginPath(); c.moveTo(bx0, by); c.lineTo(bx1, by); c.stroke();
+            c.strokeStyle = '#f2f6f8'; c.lineWidth = 1.5; c.beginPath(); c.moveTo(bx0, by); c.lineTo(bx1, by); c.stroke();
+            for (var vk = 40; vk <= 200; vk += 20) { var xk = bx0 + (bx1 - bx0) * (vk - 40) / 160, big2 = vk % 40 === 0; c.beginPath(); c.moveTo(xk, by - (big2 ? 7 : 4)); c.lineTo(xk, by); c.stroke(); if (big2) osd(String(vk), xk, by - 16, 11, 'center', '#c8d2d8'); }
+            var xm = bx0 + (bx1 - bx0) * Math.max(0, Math.min(1, fr));
+            c.fillStyle = '#ffd23a'; c.strokeStyle = 'rgba(0,0,0,0.75)'; c.lineWidth = 2; c.beginPath(); c.moveTo(xm, by + 2); c.lineTo(xm - 6, by + 12); c.lineTo(xm + 6, by + 12); c.closePath(); c.stroke(); c.fill();
+            // 数値の行: 高度・距離・水平速度・上昇率
+            var dKm = (sCam - (droneS0 === null ? sCam : droneS0)) * P.segLen / 1000;
+            osd('H', 40, 78, 13, 'left', '#9fb0ba'); osd(droneH.toFixed(1) + 'm', 58, 78, 20, 'left');
+            osd('D', 170, 78, 13, 'left', '#9fb0ba'); osd(dKm < 10 ? dKm.toFixed(2) + 'km' : dKm.toFixed(1) + 'km', 188, 78, 20, 'left');
+            osd('H.S', 320, 78, 13, 'left', '#9fb0ba'); osd(Math.round(kmh) + 'km/h', 352, 78, 20, 'left', '#ffd23a');
+            osd('V.S', 480, 78, 13, 'left', '#9fb0ba'); osd((droneVS >= 0 ? '+' : '') + droneVS.toFixed(1) + 'm/s', 512, 78, 20, 'left');
+            return;
+        }
+        if (mode) {
+            // バイク: '90 年代の 400 cc ネイキッド（CB400 SUPER FOUR など）の 2 眼。同じ大きさで左に速度計（国内仕様の 180 km/h 目盛り）、
+            // 右に回転計（14000 rpm、12000 から赤）。ギアは回転計の下の液晶
+            var bR = 84;
+            var angBS = dialFace(c, 100, 112, bR, 180, 20, 2, 999, 1, 'km/h');
+            dialNeedle(c, 100, 112, bR, angBS(Math.max(0, Math.min(180, kmhShow))));
+            lcd(c, 100, 112 + 58, 17, 3, String(Math.round(kmh)));
+            var angBT = dialFace(c, 324, 112, bR, 14000, 1000, 2, 12000, 1000, 'x1000 rpm');
+            dialNeedle(c, 324, 112, bR, angBT(Math.max(0, Math.min(14000, rpmShow))));
+            lcd(c, 324, 112 + 58, 17, 1, String(G.g));                     // ギアは回転計の下（車と同じ）
+            return;
+        }
+        // 車: 左に回転計（ギアの数字）、右に速度計
+        var tx = 110, ty = 110, tR = 96, maxR = 8000;
+        var angT = dialFace(c, tx, ty, tR, maxR, 1000, 2, 6500, 1000, 'x1000 rpm');
+        dialNeedle(c, tx, ty, tR, angT(Math.max(0, Math.min(maxR, rpmShow))));
+        lcd(c, tx, ty + 64, 18, 1, String(G.g));
+        var sx = 360, sR = 96;
+        var angS = dialFace(c, sx, 110, sR, 240, 40, 4, 999, 1, 'km/h');
+        dialNeedle(c, sx, 110, sR, angS(Math.max(0, Math.min(240, kmhShow))));
+        lcd(c, sx, 110 + 64, 18, 3, String(Math.round(kmh)));
+    }
+    function updateSpeed(dt) {
+        var dir = (keyX ? 1 : 0) - (keyZ ? 1 : 0);
+        if (dir) { speed = Math.max(SPD_MIN, Math.min(SPD_MAX, speed + dir * SPD_RATE * dt)); tachoHold = 1.5; }
+        if (keyX || keyZ) tachoA = Math.min(1, tachoA + dt / 0.15);
+        else if (tachoHold > 0) tachoHold -= dt;
+        else tachoA = Math.max(0, tachoA - dt / 0.8);
+        drawTacho(dt);
+    }
     var timeSec = 0, trainClock = 0;
     // v7: バイクモード（B で切り替え、保存）。bikeT は 0（車）〜1（バイク）へ 0.6 秒でなめらかに移る
     var bikeOn = q.bikeSet ? q.bike : !!settings.bike, bikeT = bikeOn ? 1 : 0;
@@ -4560,6 +4745,23 @@ function start(THREE, A) {
         tmpV2.lerp(FC.f, 0.4).normalize();
         tmpV.copy(camera.position).add(tmpV2);
         camera.up.copy(FC.n);
+        droneT += Math.max(-dt / 1.5, Math.min(dt / 1.5, (droneOn ? 1 : 0) - droneT));
+        var dK = droneT * droneT * (3 - 2 * droneT);
+        if (dK > 0) {
+            // 70 m 後ろ・道路の 55 m 上（中央分離帯の上）から、150 m 先の路面を見る。ホバリングのゆっくりした揺れ
+            if (!FD) { FD = new Frame(); FDT = new Frame(); }
+            frameAt(sCam - 70, FD); frameAt(sCam + 150, FDT);
+            var hx2 = 1.6 * Math.sin(timeSec * 0.23) + 0.7 * Math.sin(timeSec * 0.61 + 1.3), hy2 = 1.2 * Math.sin(timeSec * 0.31 + 0.5);
+            place(FD, hx2, 55 + hy2, droneV);
+            droneH = 55 + hy2;                                             // モニター表示用: 高度と上昇率（世界座標の高さの変化）
+            var wy = droneV.y + O.y; if (droneYPrev !== null && dt > 0) droneVS += ((wy - droneYPrev) / dt - droneVS) * Math.min(1, dt * 4); droneYPrev = wy;
+            if (droneS0 === null) droneS0 = sCam;
+            place(FDT, 0.4 * hx2, 0, droneL);
+            // 運転席の視点（位置・注視点）から、ドローンの視点へなめらかに移す。上空では上向きを鉛直に
+            tmpV.lerp(droneL, dK); camera.position.lerp(droneV, dK);
+            camera.up.lerp(yAxis, dK).normalize();
+            roll *= 1 - dK;
+        }
         camera.lookAt(tmpV);
         if (q.lookat) { tmpV.set(q.lookat[0] - O.x, GROUND_Y + q.lookat[2] - O.y, q.lookat[1] - O.z); camera.lookAt(tmpV); if (errBox && q.lookd) { errBox.textContent = 'LOOKD ' + Math.hypot(tmpV.x - camera.position.x, tmpV.z - camera.position.z).toFixed(0); errBox.style.display = 'block'; } }   // 確認用: 世界座標の点を見る
         if (roll) camera.rotateZ(-roll);                        // v7: 画面全体を視線の軸のまわりに回す（右へ倒れる = 地平線は右上がり）
@@ -4578,7 +4780,7 @@ function start(THREE, A) {
         place(FC, hx - 0.62 * (1 - bT), hy, U.uHeadPos0.value).addScaledVector(FC.f, 1.8 - 0.6 * bT);
         place(FC, hx + 0.62 * (1 - bT), hy, U.uHeadPos1.value).addScaledVector(FC.f, 1.8 - 0.6 * bT);
         U.uHeadW.value = 5.0 + 4.0 * bT;
-        U.uHeadI.value = P.headI * (1 + (P.bikeHeadK - 1) * bT);
+        U.uHeadI.value = P.headI * (1 + (P.bikeHeadK - 1) * bT) * (1 - dK);   // ドローンでは自車が無いのでヘッドライトの光を消す
 
         skyGroup.position.copy(camera.position);
         cityGroup.position.set(0, GROUND_Y - O.y, 0);
@@ -4665,12 +4867,17 @@ function start(THREE, A) {
             showToast(bikeOn ? 'バイク' : '車');
         }
         if (e.key === ' ') { paused = !paused; e.preventDefault(); }
+        if (e.key === 'd' || e.key === 'D') { droneOn = !droneOn; showToast(droneOn ? 'ドローン' : '運転席'); }
+        if (e.key === 'x' || e.key === 'X') keyX = true;
+        if (e.key === 'z' || e.key === 'Z') keyZ = true;
     });
     global.addEventListener('keyup', function (e) {
         if (e.key === 'ArrowLeft') keyL = false;
         if (e.key === 'ArrowRight') keyR = false;
+        if (e.key === 'x' || e.key === 'X') keyX = false;
+        if (e.key === 'z' || e.key === 'Z') keyZ = false;
     });
-    global.addEventListener('blur', function () { keyL = keyR = false; });
+    global.addEventListener('blur', function () { keyL = keyR = keyX = keyZ = false; });
     global.addEventListener('dblclick', toggleFull);
     function toggleFull() {
         if (document.fullscreenElement) document.exitFullscreen();
@@ -4878,6 +5085,7 @@ function start(THREE, A) {
             latTarget = Math.max(P.latMin, Math.min(P.latMax, P.laneX + steer * unitM));
         }
         lat += (latTarget - lat) * (1 - Math.exp(-dt * 4));
+        if (!paused) updateSpeed(dt); else if (tachoA > 0) { keyX = keyZ = false; tachoA = 0; drawTacho(0); }
         updateLean(paused ? 0 : dt);
 
         if (soak) { sCam += q.soakStep / P.segLen; trainClock = (sCam - soak.s0) * P.segLen / 27.8; }
@@ -5092,6 +5300,8 @@ function start(THREE, A) {
         o.seed = sp.has('seed') ? (parseInt(sp.get('seed'), 10) & 0xFFFF) : Math.floor(Math.random() * 17417);
         o.frame = parseFloat(sp.get('frame')) || 0;
         o.speed = parseFloat(sp.get('speed')) || 0;
+        o.drone = sp.get('drone') === '1';
+        o.moon = sp.get('moon') || '';
         o.q = parseInt(sp.get('q'), 10) || 0;
         o.pause = sp.get('pause') === '1';
         o.shot = sp.get('shot') === '1';
